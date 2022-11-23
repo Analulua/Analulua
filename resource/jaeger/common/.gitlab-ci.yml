@@ -1,0 +1,75 @@
+variables:
+  BINARY: "common"
+
+stages:
+  - lint-test
+  - code-test
+  - build-go
+
+lint:
+  image: gcr.io/devops-prod-308002/base/linter:latest
+  stage: lint-test
+  cache: 
+    key: ${CI_COMMIT_REF_SLUG}
+    paths:
+      - /go/src/github.com
+      - /go/src/golang.org
+      - /go/src/gitlab.com
+      - /go/src/google.golang.org
+      - /go/src/gopkg.in
+      - /go/pkg
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+      when: always
+    - if: '$CI_PIPELINE_SOURCE == "push" && $CI_COMMIT_BRANCH == "main"'
+      when: always
+  before_script:
+    - git config --global url."https://gitlab-ci-token:${CI_JOB_TOKEN}@gitlab.com".insteadOf "https://gitlab.com"
+  script:
+    - '[ -e .golangci.yml ] || cp /golangci/.golangci.yml .'
+    - golangci-lint run --issues-exit-code 0 --out-format code-climate --timeout 5m0s | tee gl-code-quality-report.json | jq -r '.[] | "\(.location.path):\(.location.lines.begin) \(.description)"'
+    - golangci-lint --version
+  artifacts:
+    reports:
+      codequality: gl-code-quality-report.json
+    paths:
+      - gl-code-quality-report.json
+  tags:
+    - devops
+
+test-coverage:
+  stage: code-test
+  image: gcr.io/devops-prod-308002/base/gobuild
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+      when: always
+    - if: '$CI_PIPELINE_SOURCE == "push" && $CI_COMMIT_BRANCH == "main"'
+      when: always
+  before_script:
+    - git config --global url."https://gitlab-ci-token:${CI_JOB_TOKEN}@gitlab.com".insteadOf "https://gitlab.com"
+  script:
+    - go test ./... -timeout 30m0s -coverpkg=./... -coverprofile=coverage.out -json > code-test.json
+  artifacts:
+    paths:
+      - ./code-test.json
+  tags:
+    - devops
+
+build-go:
+  stage: build-go
+  image: golang:1.16.4
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+      when: always
+    - if: '$CI_PIPELINE_SOURCE == "push" && $CI_COMMIT_BRANCH == "main"'
+      when: always
+  before_script:
+    - git config --global url."https://gitlab-ci-token:${CI_JOB_TOKEN}@gitlab.com".insteadOf "https://gitlab.com"
+  script:
+    - go build -o $BINARY
+  artifacts:
+    expire_in: 10 mins
+    paths:
+      - $BINARY
+  tags:
+    - devops

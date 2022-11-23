@@ -1,0 +1,149 @@
+pipeline {
+    agent any
+    tools {
+        go 'default'
+    }
+    environment {
+        GO111MODULE = 'on'
+        BINARY = "common"
+    }
+    options {
+        buildDiscarder(logRotator(
+                // number of builds to keep
+                numToKeepStr: env.BRANCH_NAME ==~ /master|develop.*/ ? '5' :
+                        env.BRANCH_NAME ==~ /feature\/.*|hotfix\/.*|bugfix\/.*|release\/.*/ ? '3' : '1',
+                // number of builds to keep the artifacts from
+                artifactNumToKeepStr: env.BRANCH_NAME ==~ /master|develop.*/ ? '3' :
+                        env.BRANCH_NAME ==~ /release\/.*|hotfix\/.*/ ? '1' : '0'
+            ))
+        gitLabConnection('deployment')
+        gitlabBuilds(builds: ['code analysis', 'test coverage', 'build'])
+        skipStagesAfterUnstable()
+    }
+    triggers {
+        gitlab(triggerOnPush: true, triggerOnMergeRequest: true, branchFilterType: 'All')
+    }
+    stages {
+        stage('Checkout') {
+            steps {
+                echo 'Checking out from Git'
+                checkout scm
+            }
+        }
+        stage('Code Analysis') {
+            steps {
+//                 checkout([
+//                     $class: 'GitSCM',
+//                     branches: [[name: 'refs/heads/master']],
+//                     doGenerateSubmoduleConfigurations: false,
+//                     extensions: [[$class: 'RelativeTargetDirectory', relativeTargetDir: 'golangci-config']],
+//                     submoduleCfg: [],
+//                     userRemoteConfigs: [[url: 'https://git.capitalx.id/devops/golangci-lint']]
+//                 ])
+//                 sh 'cp golangci-config/${BINARY}.yml .golangci.yml || true'
+                sh 'make lint'
+            }
+            post {
+                always {
+                    recordIssues enabledForFailure: true, tool: checkStyle(pattern: 'lint.xml')
+                }
+                success {
+                    updateGitlabCommitStatus name: 'code analysis', state: 'success'
+                }
+                failure {
+                    updateGitlabCommitStatus name: 'code analysis', state: 'failed'
+                    slackSend color: 'danger', message: "Job failed for ${env.JOB_NAME} #${env.BUILD_NUMBER} from branch *${env.BRANCH_NAME}* (<${env.BUILD_URL}|Go to Jenkins>). Error in code analysis, please run golangci-lint"
+                }
+                unstable {
+                    updateGitlabCommitStatus name: 'code analysis', state: 'failed'
+                }
+            }
+        }
+        stage('Test Coverage') {
+            steps {
+                sh 'make test'
+                step([$class: 'CoberturaPublisher',
+                    coberturaReportFile: 'coverage.xml',
+                    enableNewApi: true,
+                    failNoReports: true,
+                    failUnhealthy: true,
+                    failUnstable: true,
+                    autoUpdateHealth: false,
+                    autoUpdateStability: false,
+                    conditionalCoverageTargets: '100, 10, 5',
+                    methodCoverageTargets: '100, 10, 5',
+                    classCoverageTargets: '100, 10, 5',
+                    lineCoverageTargets: '100, 10, 5',
+                    fileCoverageTargets: '100, 10, 5',
+                    packageCoverageTargets: '100, 10, 5'])
+            }
+            post {
+                success {
+                    updateGitlabCommitStatus name: 'test coverage', state: 'success'
+                }
+                failure {
+                    updateGitlabCommitStatus name: 'test coverage', state: 'failed'
+                    slackSend color: 'danger', message: "Job failed for ${env.JOB_NAME} #${env.BUILD_NUMBER} from branch *${env.BRANCH_NAME}* (<${env.BUILD_URL}|Go to Jenkins>). Error in test coverage, please complete unit test"
+                }
+                unstable {
+                    updateGitlabCommitStatus name: 'test coverage', state: 'failed'
+                }
+            }
+        }
+        stage('Code Quality') {
+            environment {
+                scannerHome = tool 'SonarScanner'
+            }
+            when {
+                anyOf { branch 'master'; branch 'develop' }
+            }
+            steps {
+                withSonarQubeEnv('ccq') {
+                    sh "${scannerHome}/bin/sonar-scanner"
+                }
+                timeout(time: 5, unit: 'MINUTES') {
+                    waitForQualityGate abortPipeline: true
+                }
+            }
+            post {
+                success {
+                    updateGitlabCommitStatus name: 'code quality', state: 'success'
+                }
+                failure {
+                    updateGitlabCommitStatus name: 'code quality', state: 'failed'
+                    slackSend color: 'danger', message: "Job failed for ${env.JOB_NAME} #${env.BUILD_NUMBER} from branch *${env.BRANCH_NAME}* (<${env.BUILD_URL}|Go to Jenkins>). Error in sonarqube scan"
+                }
+                unstable {
+                    updateGitlabCommitStatus name: 'code quality', state: 'failed'
+                }
+            }
+        }
+        stage('Build') {
+            steps {
+                sh 'make build'
+            }
+            post {
+                success {
+                    updateGitlabCommitStatus name: 'build', state: 'success'
+                }
+                failure {
+                    updateGitlabCommitStatus name: 'build', state: 'failed'
+                }
+                unstable {
+                    updateGitlabCommitStatus name: 'build', state: 'failed'
+                }
+            }
+        }
+    }
+    post {
+        success {
+            slackSend color: 'good', message: "Job success for ${env.JOB_NAME} #${env.BUILD_NUMBER} from branch *${env.BRANCH_NAME}* (<${env.BUILD_URL}|Go to Jenkins>)"
+        }
+        failure {
+            slackSend color: 'danger', message: "Job failed for ${env.JOB_NAME} #${env.BUILD_NUMBER} from branch *${env.BRANCH_NAME}* (<${env.BUILD_URL}|Go to Jenkins>)"
+        }
+        unstable{
+            slackSend color: 'warning', message: "Job unstable for ${env.JOB_NAME} #${env.BUILD_NUMBER} from branch *${env.BRANCH_NAME}* (<${env.BUILD_URL}|Go to Jenkins>)"
+        }
+    }
+}

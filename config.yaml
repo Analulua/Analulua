@@ -1,0 +1,23 @@
+service:
+  name: "Recurring Service"
+  grpcPort: ":8080"
+  httpPort: ":2222"
+telemetry:
+  tracer:
+    collectorEndpoint: "http://localhost:14268/api/traces"
+    serviceName: ${service.name}
+    sourceEnv: "local"
+  metric:
+    port: 8181
+    agentAddress: "127.0.0.1:8125"
+    sampleRate: 1
+    datadogKey: ""
+  filter:
+    body:
+    header:
+pubsub:
+  publishTopic:
+    recurring-happen: "recurring.happen-"
+  subscriber:
+    subscriptionHappenResult: recurring.happen-result-sub-local
+    subscriptionJobFinish: recurring.job-finish-sub-local

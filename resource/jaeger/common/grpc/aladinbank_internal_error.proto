@@ -1,0 +1,9 @@
+syntax = "proto3";
+package grpc;
+option go_package = "newdemo1/resource/jaeger/common/grpc";
+
+message Error {
+ string code = 1;
+ string message = 2;
+ map<string, string> attributes = 3;
+}
